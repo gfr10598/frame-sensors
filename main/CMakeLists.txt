@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp" "lsm6dsv16x_reg.c" "LSM6DSV16XSensor.cpp"
+    SRCS "main.cpp" "LSM6DSV16XSensor.cpp"  # "lsm6dsv16x_reg.c" 
     INCLUDE_DIRS ""
 )
 
