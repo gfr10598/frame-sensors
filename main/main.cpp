@@ -27,19 +27,7 @@ processor will only require about 20% duty cycle to keep up.
 #include "base64_encode.hpp"
 
 #include "IMU.h"
-
-#define FIFO_SAMPLE_THRESHOLD 10
-#define FLASH_BUFF_LEN 8192
-// If we send the raw data to the other processor for output to WiFi,
-// we can likely keep up with 3840 samples/sec.
-#define SENSOR_ODR 1920
-
-struct Tag
-{
-    unsigned int _unused : 1;
-    unsigned int cnt : 2;
-    unsigned int tag : 5;
-};
+#include "merge.h"
 
 /// @brief  Read many records from the FIFO and print them.
 ///  It appears that all records from a clock tick appear simultaneously.
@@ -57,28 +45,6 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
     }
 
     return actual;
-}
-
-struct LoggerMsg
-{
-    bool delayed;      // Whether the vTaskDelayUntil was delayed.
-    int32_t read_time; // usec time at end of collection
-    bool imu;          // Which IMU was collected.
-    int sample_count;
-    lsm6dsv16x_fifo_record_t records[32]; // Up to 16 samples per read.
-};
-
-void logger_task(void *q)
-{
-    QueueHandle_t queue = (QueueHandle_t)q;
-    while (1)
-    {
-        LoggerMsg msg;
-        if (xQueueReceive(queue, &msg, portMAX_DELAY) == pdTRUE)
-        {
-            printf("Logger: IMU: %d Read %2d samples at %4ld usec (%d)\n", msg.imu, msg.sample_count, msg.read_time, msg.delayed);
-        }
-    }
 }
 
 extern "C" void app_main()
@@ -99,7 +65,7 @@ extern "C" void app_main()
     // Start logger task
     QueueHandle_t q = xQueueCreate(10, sizeof(LoggerMsg));
     TaskHandle_t xHandle = NULL;
-    auto xReturned = xTaskCreate(
+    xTaskCreate(
         logger_task, /* Function that implements the task. */
         "LoggerTask",
         4096,             /* Stack size in words, not bytes. */
@@ -108,9 +74,8 @@ extern "C" void app_main()
         &xHandle);
 
     int led = HIGH;
-    uint64_t gap_start = esp_timer_get_time();
-    auto xLastWakeTime = xTaskGetTickCount();
-    auto toggle = false;
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    bool toggle = false;
     while (1)
     {
         auto delayed = xTaskDelayUntil(&xLastWakeTime, 2);
@@ -129,8 +94,7 @@ extern "C" void app_main()
                 actual = read_all(imu2, msg.records, 32);
             }
             toggle = !toggle;
-            auto end = esp_timer_get_time();
-            msg.read_time = end;
+            msg.read_time = esp_timer_get_time();
             msg.sample_count = actual;
             xQueueSend(q, &msg, 0);
         }
@@ -141,6 +105,5 @@ extern "C" void app_main()
             led = led ^ 1;
             digitalWrite(13, led);
         }
-        // printf("*************************************************************************************** %6lld  1920 samples\n", esp_timer_get_time() / 1000);
     }
 }
