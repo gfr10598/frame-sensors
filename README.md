@@ -1,79 +1,64 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- |
+# Strikeometer based on frame mounted sensors
 
-# Basic I2C Master Example
+## Repo init
+This code depends on a library submodule in components/LSM6DSV...
+It is necessary to run git submodule init and git submodule update.
+Also, the component requires a CMakeLists.txt containing
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+```CMake
+cmake_minimum_required(VERSION 3.16)
 
-## Overview
-
-This example demonstrates basic usage of I2C driver by reading and writing from a I2C connected sensor:
-
-If you have a new I2C application to go (for example, read the temperature data from external sensor with I2C interface), try this as a basic template, then add your own code.
-
-## How to use example
-
-### Hardware Required
-
-To run this example, you should have an Espressif development board based on a chip listed in supported targets as well as a MPU9250. MPU9250 is a inertial measurement unit, which contains a accelerometer, gyroscope as well as a magnetometer, for more information about it, you can read the [datasheet of the MPU9250 sensor](https://invensense.tdk.com/wp-content/uploads/2015/02/PS-MPU-9250A-01-v1.1.pdf).
-
-#### Pin Assignment
-
-**Note:** The following pin assignments are used by default, you can change these in the `menuconfig` .
-
-|                  | SDA             | SCL           |
-| ---------------- | -------------- | -------------- |
-| ESP I2C Master   | I2C_MASTER_SDA | I2C_MASTER_SCL |
-| MPU9250 Sensor   | SDA            | SCL            |
-
-For the actual default value of `I2C_MASTER_SDA` and `I2C_MASTER_SCL` see `Example Configuration` in `menuconfig`.
-
-**Note:** There's no need to add an external pull-up resistors for SDA/SCL pin, because the driver will enable the internal pull-up resistors.
-
-### Build and Flash
-
-Enter `idf.py -p PORT flash monitor` to build, flash and monitor the project.
-
-(To exit the serial monitor, type ``Ctrl-]``.)
-
-See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html) for full steps to configure and use ESP-IDF to build projects.
-
-## Example Output
-
-```bash
-I (328) example: I2C initialized successfully
-I (338) example: WHO_AM_I = 71
-I (338) example: I2C de-initialized successfully
+idf_component_register(
+    SRCS "src/LSM6DSV16XSensor.cpp"
+         "src/lsm6dsv16x_reg.c"
+    INCLUDE_DIRS "src"
+    REQUIRES arduino-esp32
+)
 ```
 
-## Troubleshooting
+## When compiler can't find the .h file...
+idf.py reconfigure
 
-(For any technical queries, please open an [issue](https://github.com/espressif/esp-idf/issues) on GitHub. We will get back to you as soon as possible.)
 
-## Notes:
-- Used vscode extension to create the project
-- Used idf.py add-dependency arduino-esp32 to add arduino as component.
-- project defaulted to the wrong idf version, based on idf.py --version
-    - consequently, the arduino-esp32 component wouldn't compile.
-- used vscode Select Current ESP-IDF Version to change the to 5.5.1
-- manually changed the version in the idf_component.yml file.
+## Data merging
+When we read a set of samples, we should also read the current time after the read
+completes.  This should be shortly after the last sample was pushed into the FIFO.
 
-Then
-- replaced template code with old code
-- idf.py add-dependency again, and updated version requirements
-- deleted old main.c
-- idf.py fullclean && idf.py build - BUILDS!!
+If we also saved the timestamp on the previous collection, we know the interval 
+covered by the sample set.  We can use a more precise estimate of the sample
+interval to set the approximate times of the individual samples.
 
-Make sure to use the 5.5.1 (or later) version of ESP_IDF tools.
+Generally speaking, the two sample sets will have a nearly 1:1 correspondence.
+However, if there is, e.g. a 1% skew, then roughly every 4 blocks, we will need
+to insert or drop a sample from one IMU or the other.
 
-A lot of code is now in ./managed_components/espressif__arduino-esp32/libraries/,
-including things like Wire.  It does not need to be saved in git, because the build
-process will download it, based on the arduino-esp32 dependency.
+## Sync on Counts
+Every record has a count field, modulo 4.  These will have a fairly stable
+alignment, with slight drift resulting in an occasional adjustment.  The 
+relationship will be a modulo 4 value as well.
 
-Now, how do we add the LSM library?  I'm trying it out as a git submodule, under components,
-with a CMakeLists file to create an idf component.
-However, it looks like I wrote a bit of extra code in the LSM...cpp file that doesn't exist
-in the STMicro code.  
+This should be the primary method for merging the streams, and the secondary
+system should be adjusting the skew between the counts.
 
-It seems to compile fine if I delete my copies of lsm*.h and lsm*.c files, and let the LSM*.cpp 
-pick those up from the component.  Yay!  Still need to test it on a copy of the hardware. 
+## Tasks
+
+### IMU reader
+Runs at high priority, every 2 msec, and ping pongs between the two IMU devices.
+
+Reading 4 records (all we need) usually takes 850 msecc, but occasionally takes
+up to 1100 msec.  Since we need to do two collections on the same bus, we
+probably should target a 4 msec collection interval, which will mean about 8
+records from each device.  That will take up to 1300 msec per device, which is
+comfortable.
+
+### Matcher / Encoder / Sender
+Merges the data, and sends combined data out to the serial port.
+A single merged record will have 6 16 bit values.  This works out to 
+16 bytes in base64.  
+We expect to send 10 merged records roughly every 5 msec.  The sender will receive
+batches of ~8 records from each imu.
+Messages will be exactly ... (180) bytes, containing 10 records of 6 channels each. 
+
+
+## How multiple read works:
+an4987-lsm6dsm
