@@ -1,6 +1,6 @@
 idf_component_register(
     REQUIRES esp_timer freertos nvs_flash
-    SRCS "main.cpp" "IMU.cpp" "merge.cpp" # "lsm6dsv16x_reg.c" 
+    SRCS "main.cpp" "IMU.cpp" "merge.cpp" "fitter.cpp" 
     PRIV_REQUIRES LSM6DSV16X
     INCLUDE_DIRS ""
 )
