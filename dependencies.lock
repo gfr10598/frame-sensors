@@ -153,6 +153,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.6.0~1
+  espressif/dl_fft:
+    component_hash: 7dadbd644c0d7ba4733cc3726ec4cff6edf27b043725e1115861dec1609a3d28
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.3.1
   espressif/esp-dsp:
     component_hash: 42dce32d46ac93dc11f60d368e29a830e9661c7345d794b8a45c343479cae636
     dependencies:
@@ -180,6 +190,24 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 0.0.11
+  espressif/esp-sr:
+    component_hash: 1158509d88b59134ca880ecf87388b0eacceff6fe6b6b27fd5f1a563d6cfc50b
+    dependencies:
+    - name: espressif/dl_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.2.0'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.7.0
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 2.3.0
   espressif/esp-zboss-lib:
     component_hash: 321883d142421f65009972408287441794250057668a11abbdfd8bec77c3309a
     dependencies:
@@ -335,7 +363,7 @@ dependencies:
       type: service
     version: 1.2.0
   espressif/esp_secure_cert_mgr:
-    component_hash: d5d773260a965bffa8146f6c8d8620dc60dc656a9108be337155f478703d984e
+    component_hash: e8ce8d5ac0ef4ef5df12fdb266190413c4170ad39b394435f0e3115a4fddc6a6
     dependencies:
     - name: idf
       require: private
@@ -343,7 +371,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 2.7.1
+    version: 2.7.2
   espressif/jsmn:
     component_hash: d80350c41bbaa827c98a25b6072df00884e72f54885996fab4a4f0aebce6b6c3
     dependencies:
@@ -385,7 +413,7 @@ dependencies:
       type: service
     version: 1.0.20~2
   espressif/mdns:
-    component_hash: 5c148bc0996305bcf111c465bba021a8155d4247b0d9353c39da9b44a91ca381
+    component_hash: 29e47564b1a7ee778135e17fbbf2a2773f71c97ebabfe626c8eda7c958a7ad16
     dependencies:
     - name: idf
       require: private
@@ -393,7 +421,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.9.0
+    version: 1.9.1
   espressif/network_provisioning:
     component_hash: ef2e10182fd1861e68b821491916327c25416ca7ae70e5a6e43313dbc71fe993
     dependencies:
@@ -423,7 +451,7 @@ dependencies:
       type: idf
     version: 5.5.1
   joltwallet/littlefs:
-    component_hash: 150ca47225f7c9917f7f610a5f85e5e93fe3c15402234c23496ff045ad558b0b
+    component_hash: 1808d73e99168f6f3c26dd31799a248484762b3a320ec4962dec11a145f4277f
     dependencies:
     - name: idf
       require: private
@@ -431,10 +459,10 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.20.2
+    version: 1.20.3
 direct_dependencies:
 - espressif/arduino-esp32
 - idf
 manifest_hash: 0abf59c7b42d66bd18216dd021ec5a16550c8ca7855ee52b096f935ee282c314
-target: esp32s2
+target: esp32s3
 version: 2.0.0

@@ -14,94 +14,124 @@ struct MergeMessage
     int8_t right_cnt;
 };
 
+class Tracker
+{
+private:
+    int delta_time = 0;
+
+    LoggerMsg msg;
+    int next = 0;
+    int count = 0;
+
+public:
+    Tracker() {}
+
+    void replace(LoggerMsg &new_msg)
+    {
+        delta_time = new_msg.read_time - msg.read_time;
+        msg = new_msg;
+        next = 0;
+        count += msg.sample_count;
+    }
+
+    int next_time()
+    {
+        if (delta_time == 0)
+            return -1;
+        if (next >= msg.sample_count)
+            return -1;
+        return msg.read_time - (delta_time * (msg.sample_count - next) / msg.sample_count);
+    }
+
+    lsm6dsv16x_fifo_record_t &next_record()
+    {
+        return msg.records[next++];
+    }
+
+    int total_count()
+    {
+        return count;
+    }
+};
+
+/// @brief Merges data from two IMUs.
 class Merger
 {
 private:
     MergeMessage ping_pong[20]; // About 10 msec of data.
-    int left_index = 0;
-    int right_index = 0;
-    bool last_imu = false;
-    bool last_written = false; // false for last, true for first.
+    int ping_pong_index = 0;    // Next entry to write into.
+    Tracker left_tracker;
+    Tracker right_tracker;
 
-    int total_left = 0;
-    int total_right = 0;
+    bool last_imu = false; // Last IMU seen.
+    int left_skips = 0;
+    int right_skips = 0;
 
 public:
-    /// @brief Merges one data record from left IMU.
-    /// @param data
-    void merge_left(lsm6dsv16x_fifo_record_t &rec)
+    bool next(bool log = false)
     {
-        printf("L");
-        int16_t *data = rec.data;
-        ping_pong[left_index].left_cnt = rec.tag.tag_cnt;
-        ping_pong[left_index].data[0] = data[0];
-        ping_pong[left_index].data[1] = data[1];
-        ping_pong[left_index].data[2] = data[2];
-        left_index = (left_index + 1) % 20;
-        if (left_index == 0 && right_index < 10)
+        int left_time = left_tracker.next_time();
+        int right_time = right_tracker.next_time();
+        if (left_time <= 0 || right_time <= 0)
+            return false;
+        while (left_time < right_time - 500)
         {
-            // Write out the last block
-            if (last_written == false)
-            {
-                printf("\nLeft  merge is writing last  block  %1d %1d %2d %2d  ******************   ", ping_pong[10].left_cnt, ping_pong[10].right_cnt, left_index, right_index);
-            }
-            else
-            {
-                printf("\nLeft  merge is writing last  block  %1d %1d %2d %2d   ", ping_pong[10].left_cnt, ping_pong[10].right_cnt, left_index, right_index);
-            }
-            last_written = false;
-        }
-        else if (left_index == 10 && right_index >= 10)
-        {
-            if (last_written == true)
-            {
-                printf("\nLeft  merge is writing first block  %1d %1d %2d %2d  ******************   ", ping_pong[0].left_cnt, ping_pong[0].right_cnt, left_index, right_index);
-            }
-            else
-            {
-                printf("\nLeft  merge is writing first block  %1d %1d %2d %2d   ", ping_pong[0].left_cnt, ping_pong[0].right_cnt, left_index, right_index);
-                last_written = true;
-            }
-        }
-    }
+            // Drop the left sample.
+            left_skips++;
 
-    void merge_right(lsm6dsv16x_fifo_record_t &rec)
-    {
-        printf("R");
-        int16_t *data = rec.data;
-        ping_pong[right_index].right_cnt = rec.tag.tag_cnt;
-        ping_pong[right_index].data[3] = data[0];
-        ping_pong[right_index].data[4] = data[1];
-        ping_pong[right_index].data[5] = data[2];
-        right_index = (right_index + 1) % 20;
-        if (right_index == 0 && left_index < 10)
-        {
-            if (last_written == false)
-            {
-                printf("\nRight merge is writing last  block  %1d %1d %2d %2d  ******************   ", ping_pong[10].left_cnt, ping_pong[10].right_cnt, left_index, right_index);
-            }
-            else
-            {
-                printf("\nRight merge is writing last  block  %1d %1d %2d %2d   ", ping_pong[10].left_cnt, ping_pong[10].right_cnt, left_index, right_index);
-            }
-            last_written = false;
+            left_tracker.next_record();
+            left_time = left_tracker.next_time();
+            if (left_time <= 0)
+                return false;
         }
-        else if (right_index == 10 && left_index >= 10)
+        while (right_time < left_time - 500)
         {
-            if (last_written == true)
-            {
-                printf("\nRight merge is writing first block  %1d %1d %2d %2d  ******************   ", ping_pong[0].left_cnt, ping_pong[0].right_cnt, left_index, right_index);
-            }
-            else
-            {
-                printf("\nRight merge is writing first block  %1d %1d %2d %2d   ", ping_pong[0].left_cnt, ping_pong[0].right_cnt, left_index, right_index);
-            }
-            last_written = true;
+            // Drop the right sample.
+            right_skips++;
+
+            right_tracker.next_record();
+            right_time = right_tracker.next_time();
+            if (right_time <= 0)
+                return false;
         }
+        if (log)
+        {
+            printf("Next times: Left=%9d Right=%9d LS=%4d/%6d RS=%4d/%6d\n", left_time, right_time, left_skips, left_tracker.total_count(), right_skips, right_tracker.total_count());
+        }
+        lsm6dsv16x_fifo_record_t &left = left_tracker.next_record();
+        lsm6dsv16x_fifo_record_t &right = right_tracker.next_record();
+
+        auto merge = &ping_pong[ping_pong_index++];
+        merge->data[0] = left.data[0];
+        merge->data[1] = left.data[1];
+        merge->data[2] = left.data[2];
+        merge->data[3] = right.data[0];
+        merge->data[4] = right.data[1];
+        merge->data[5] = right.data[2];
+        merge->left_cnt = left.tag.tag_cnt;
+        merge->right_cnt = right.tag.tag_cnt;
+
+        if (ping_pong_index == 10)
+        {
+            // Output merged data.
+            auto &m = ping_pong[0];
+            printf("LCnt=%2d RCnt=%2d\n",
+                   m.left_cnt, m.right_cnt);
+        }
+        else if (ping_pong_index == 20)
+        {
+            // Output merged data.
+            auto &m = ping_pong[0];
+            printf("LCnt=%2d RCnt=%2d\n",
+                   m.left_cnt, m.right_cnt);
+            ping_pong_index = 0;
+        }
+        return true;
     }
 
     void handle(LoggerMsg &msg)
     {
+        auto start = esp_timer_get_time();
         if (msg.imu == last_imu)
         {
             printf("****************************************** Warning: duplicate IMU message %d\n", msg.imu);
@@ -109,50 +139,18 @@ public:
         }
         last_imu = msg.imu;
 
-        int count = 0;
-        if (left_index == 0 && right_index == 0)
-        {
-            if (msg.imu)
-                left_index = 4;
-            else
-                right_index = 4;
-        }
-
-        for (int i = 0; i < msg.sample_count; i++)
-        {
-            lsm6dsv16x_fifo_record_t &rec = msg.records[i];
-            if (rec.tag.tag_sensor == 2) // XL
-            {
-                count++;
-                if (msg.imu)
-                    merge_right(rec);
-                else
-                    merge_left(rec);
-            }
-        }
-
         if (msg.imu)
-        {
-            // Right IMU should be ahead of left by roughly 4 samples.
-            int offset = (right_index - left_index + 20) % 20;
-            // printf("Right: %2d %2d %2d %2d\n", right_index, left_index, offset, count);
-            // Bad hack for now
-            if (count >= 8 && offset < 3)
-            {
-                // merge_right(msg.records[msg.sample_count - 1]);
-            }
-        }
+            right_tracker.replace(msg);
         else
-        {
-            // Left IMU should be behind right by roughly 4 samples.
-            int offset = (left_index - right_index + 20) % 20;
-            // printf("Left: %2d %2d %2d %2d\n", right_index, left_index, offset, count);
-            // Bad hack for now
-            if (count >= 8 && offset < 3)
-            {
-                // merge_left(msg.records[msg.sample_count - 1]);
-            }
-        }
+            left_tracker.replace(msg);
+
+        // Try to merge as much data as possible.
+        next(true);
+        while (next())
+            ;
+
+        auto end = esp_timer_get_time();
+        printf("Merge time: %d usec for %d samples\n", (int)(end - start), msg.sample_count);
     }
 };
 

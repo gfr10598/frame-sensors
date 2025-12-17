@@ -175,29 +175,11 @@ LSMExtension init_lsm(TwoWire *wire, uint8_t address)
         status |= LSM.Set_SFLP_ODR(LSM6DSV16X_SFLP_15Hz);
     if (status != LSM6DSV16X_OK)
     {
-        printf("LSM6DSV16X Sensor failed to configure %d\n", status);
-        while (1)
-            ;
+        printf("LSM6DSV16X Sensor failed to configure %d\n  Suspending!\n", status);
+        vTaskSuspend(NULL);
     }
-    else
-    {
-        printf("LSM enabled\n");
-        delay(3); // Should allow about 12 samples.
-        uint16_t samples = 0;
-        LSM.FIFO_Get_Num_Samples(&samples);
-        lsm6dsv16x_fifo_record_t data[32];
-        uint16_t samples_read = 0;
-        LSM.Read_FIFO_Data(32, &data[0], &samples_read);
-        printf("%d Samples available  %d Samples read\n", samples, samples_read);
-        for (uint16_t i = 0; i < samples_read; i++)
-        {
-            lsm6dsv16x_fifo_record_t datum = data[i];
-            printf("Record %d: Cnt=0x%02X  Tag=0x%02X Data=%-6d %-6d %-6d\n", i,
-                   datum.tag.tag_cnt,
-                   datum.tag.tag_sensor,
-                   datum.data[0], datum.data[1], datum.data[2]);
-        }
-    }
+
+    printf("LSM configured - rate adjust = %6.4f\n", LSM.Get_Rate_Adjustment());
 
     // LSM.Slow();
     // for (int i = 0; i < 10; i++)

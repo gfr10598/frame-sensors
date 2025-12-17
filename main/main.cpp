@@ -63,7 +63,7 @@ extern "C" void app_main()
     printf("LSM initialized\n");
 
     // Start logger task
-    QueueHandle_t q = xQueueCreate(10, sizeof(LoggerMsg));
+    QueueHandle_t q = xQueueCreate(40, sizeof(LoggerMsg));
     TaskHandle_t xHandle = NULL;
     xTaskCreate(
         logger_task, /* Function that implements the task. */
@@ -75,6 +75,13 @@ extern "C" void app_main()
 
     int led = HIGH;
     TickType_t xLastWakeTime = xTaskGetTickCount();
+    LoggerMsg msg;
+    while (read_all(imu1, msg.records, 32) > 4)
+        ;
+    while (read_all(imu2, msg.records, 32) > 4)
+        ;
+
+    xTaskDelayUntil(&xLastWakeTime, 2);
     bool toggle = false;
     while (1)
     {
@@ -97,6 +104,12 @@ extern "C" void app_main()
             msg.read_time = esp_timer_get_time();
             msg.sample_count = actual;
             xQueueSend(q, &msg, 0);
+
+            if (10 < uxQueueMessagesWaiting(q))
+            {
+                printf("**********   Warning: logger queue has %d messages pending\n", uxQueueMessagesWaiting(q));
+                vTaskSuspend(NULL);
+            }
         }
 
         auto ticks = xTaskGetTickCount();

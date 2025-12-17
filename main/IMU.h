@@ -18,6 +18,12 @@ public:
     LSM6DSV16XStatusTypeDef FIFO_Get_Data(uint8_t *Data);
     LSM6DSV16XStatusTypeDef FIFO_Get_Tag_And_Data(uint8_t *Data);
     LSM6DSV16XStatusTypeDef Read_FIFO_Data(uint16_t max, lsm6dsv16x_fifo_record_t *records, uint16_t *count);
+    float Get_Rate_Adjustment()
+    {
+        int8_t adj;
+        lsm6dsv16x_odr_cal_reg_get(&reg_ctx, &adj);
+        return 1.0 + adj * 0.0013;
+    }
 
     LSM6DSV16XStatusTypeDef Fast()
     {
