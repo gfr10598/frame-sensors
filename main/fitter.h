@@ -1,55 +1,56 @@
 #pragma once
 
+#include <stdint.h>
+#include <utility>
+
 /// LinearFitter is a simple linear regression class that can be used
 /// to fit a line to a set of points.  It decays the accumulators
 /// with time constant 1/alpha, measured in samples, so that older
 /// data is gradually forgotten.
-
-struct Line
-{
-    float x_mean;
-    float y_mean;
-    float slope;
-};
 
 /// LinearFitter is a simple linear regression class that can be used
 /// to fit a line to a set of points.  It decays the accumulators
 /// with time constant 1/alpha, measured in samples, so that the
 /// line reflects the most recent data.
 /// It also provides the residual deviation from the line.
-class LinearFitter
+class TimeFitter
 {
 public:
     /// Create a new LinearFitter, that decays at rate (1-alpha)
     /// If dx in non-zero, then newy(y) is equivalent to coord(x+dx, y)
-    LinearFitter(float alpha)
-        : x_center(0), y_center(0), xsum(0), x2sum(0), ysum(0),
-          xysum(0), alpha(alpha), n(0) {}
+    TimeFitter(float alpha)
+        : sample_offset(0), time_offset(0), ksum(0), k2sum(0), tsum(0),
+          ktsum(0), alpha(alpha), n(0) {}
 
     /// Add a point to the linear fitter.
     /// In release mode on x86_64, this takes about 20ns for f64
-    void coord(long x_val, long y_val);
+    void coord(long k, long t);
 
-    /// @brief Recenter the fitter around the current xbar/ybar.
-    void recenter();
+    /// @brief  Predict time value for given sample index.
+    /// @param k  sample index
+    /// @return time in microseconds
+    long time_for(long k) const;
+    /// @brief  Predict sample index for given time value.
+    /// @param t
+    /// @return The index and fractional index corresponding to the given time.
+    std::pair<long, float> sample_for(long t) const;
+
+    float slope() const;
 
 private:
-    // All computations are done relative to this center
-    long x_center;
-    long y_center;
+    /// @brief Recenter the fitter around the current kbar/tbar.
+    void recenter();
 
-    float xsum;
-    float x2sum;
-    float ysum;
-    float xysum;
+    // All computations are done relative to this center
+    long sample_offset;
+    long time_offset;
+
+    float ksum;
+    float k2sum;
+    float tsum;
+    float ktsum;
     float alpha;
     float n;
 
-    float y(float x_val) const;
-
-public:
-    float predict(float x_val) const;
-    float inverse(float y_val) const;
-    float slope() const;
-    Line fit() const;
+    int recenter_count;
 };

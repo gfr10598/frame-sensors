@@ -16,57 +16,89 @@
 struct MergeMessage
 {
     int16_t data[6]; // This will translate into 16 bytes of base64.
-    int8_t left_cnt;
-    int8_t right_cnt;
 };
 
-/// @brief Tracks sampling skew between two IMUs.
-/// This tracks the incoming sample timings of the two IMUs,
-/// estimating the timing only from the timestamp associated with
-/// the end of each collection.  It estimates time as a function
-/// of sample count, using a decaying linear fitter.
-///
-/// BUG - float only has a precision of 24 bits, so the deltas will
-/// become inaccurate after about 10 million samples, which is only
-/// about 2 hours at 2000 samples/sec.
-class SkewTracker
+/// @brief Tracks an individual IMU's data and data rate.
+class IMUTracker
 {
+private:
+    TimeFitter fitter;
+    LoggerMsg current_msg;
+    long base_count = 0;          // Sample count of the first record in current_msg.
+    int16_t last_record[3] = {0}; // Last record from previous message.
+    int next;
+
 public:
-    LinearFitter left;
-    LinearFitter right;
-    long left_count = 0; // At 2000 samples/sec, this will saturate in 20 days
-    long right_count = 0;
-
-    SkewTracker() : left(0.001f), right(0.001f) {}
-
-    /// @brief
-    /// @param count - number of samples collected
-    /// @param time  - time in usec at end of collection
-    void update_left(int count, int64_t usec)
+    IMUTracker() : fitter(0.001f) {}
+    void update(LoggerMsg msg)
     {
-        left_count += count;
-        left.coord(left_count, usec);
-        left.recenter();
+        // Update the fitter with the new data.
+        if (current_msg.sample_count > 0)
+        {
+            base_count += current_msg.sample_count;
+            fitter.coord(base_count, current_msg.read_time);
+            for (int i = 0; i < 3; i++)
+                last_record[i] = current_msg.records[current_msg.sample_count - 1].data[i];
+        }
+        current_msg = msg;
+        next = 0;
     }
 
-    void add_right(int count, int64_t usec)
+    // Time attributed to a given sample count.
+    int64_t time_for(long sample_count)
     {
-        right_count += count;
-        right.coord(right_count, usec);
-        right.recenter();
+        return fitter.time_for(sample_count);
     }
 
-    // We want to interpolate whichever IMU has the higher slope, meaning
-    // that the interval between samples is longer.
-    // We plug in the sample count for the faster IMU to get a timestamp,
-    // then interpolate the slower IMU samples to match that timestamp.
-    //
-    // The slower IMU samples each have a corresponding timestamp from
-    // the linear fitter.  We estimate the timestamps by just incrementing
-    // by the slope for each IMU.
-    //
-    // Note that the incoming sample timestamps are used only for updating
-    // the linear fitters.
+    // Time between samples in usec.
+    int64_t delta_t()
+    {
+        return (int64_t)(fitter.slope());
+    }
+
+    /// @brief Project this IMUTracker's data onto another IMUTracker's fitter.
+    /// @param other
+    /// @return the 'other' sample index of the first projected sample, and the projected values
+    /// starting from that sample.
+    std::pair<int64_t, LoggerMsg> project(const TimeFitter &other)
+    {
+        LoggerMsg projected;
+        // This is the time of the first sample in the current msg.
+        int64_t start_time = fitter.time_for(base_count);
+        // Find the corresponding sample location in the other IMU.
+        std::pair<int64_t, float> other_sample_base = other.sample_for(start_time);
+
+        // Compute the size of the other IMU step size in units of this IMU's sample count.
+        // NOTE: This should generally be less than 1.0, since we are projecting
+        // onto the faster IMU timebase.  It should also be very stable.
+        // Units are local steps per other step.
+        float increment = other.slope() / fitter.slope();
+
+        float fraction_index = other_sample_base.second * increment;
+
+        // Find the index into the local data.
+        long other_time = start_time - (other_sample_base.second);
+
+        // We need to project the sample before the first sample in the LoggerMsg, using
+        // the last_record.
+        int k = 0;
+        auto rec = &projected.records[k++];
+        float alpha = other_sample_base.second; // The distance from k-1 sample from other IMU.
+        // compute the interpolated values.
+        for (int i = 0; i < 3; i++)
+        {
+            float value = last_record[i] + (current_msg.records[0].data[i] - last_record[i]) * alpha;
+            rec->data[i] = (int16_t)value;
+        }
+
+        // Now project the rest of the samples.
+        for (int i = 0; i < current_msg.sample_count; i++)
+        {
+            float frac = other_sample_base.second + increment;
+        }
+
+        return {other_sample_base.first, projected};
+    }
 };
 
 class Tracker
@@ -118,8 +150,6 @@ private:
     Tracker left_tracker;
     Tracker right_tracker;
 
-    SkewTracker skew_tracker;
-
     bool last_imu = false; // Last IMU seen.
     int left_skips = 0;
     int right_skips = 0;
@@ -165,28 +195,16 @@ public:
         merge->data[3] = right.data[0];
         merge->data[4] = right.data[1];
         merge->data[5] = right.data[2];
-        merge->left_cnt = left.tag.tag_cnt;
-        merge->right_cnt = right.tag.tag_cnt;
 
         if (ping_pong_index == 10)
         {
             // Output merged data.
             auto &m = ping_pong[0];
-            printf("LCnt=%2d RCnt=%2d LSlope:%f RSlope:%f\n",
-                   m.left_cnt, m.right_cnt, skew_tracker.left.slope(), skew_tracker.right.slope());
         }
         else if (ping_pong_index == 20)
         {
             // Output merged data.
             auto &m = ping_pong[0];
-            printf("LCnt=%2d RCnt=%2d LSlope:%f RSlope:%f\n",
-                   m.left_cnt, m.right_cnt, skew_tracker.left.slope(), skew_tracker.right.slope());
-            ping_pong_index = 0;
-            {
-                auto t = skew_tracker.left.predict(skew_tracker.left_count);
-                float right = skew_tracker.right.inverse((float)t);
-                printf("%ld -> %8.1f\n", skew_tracker.left_count, right);
-            }
         }
 
         return true;
@@ -204,12 +222,10 @@ public:
 
         if (msg.imu)
         {
-            skew_tracker.add_right(msg.sample_count, msg.read_time);
             right_tracker.replace(msg);
         }
         else
         {
-            skew_tracker.update_left(msg.sample_count, msg.read_time);
             left_tracker.replace(msg);
         }
 
