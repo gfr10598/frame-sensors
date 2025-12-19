@@ -1,4 +1,8 @@
 # Strikeometer based on frame mounted sensors
+### QEMU
+https://alexconesa.wordpress.com/2025/01/17/speeding-up-esp32-embedded-system-testing-with-qemu-on-ubuntu/
+https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/additionalfeatures/qemu.html
+
 
 ## Repo init
 This code depends on a library submodule in components/LSM6DSV...

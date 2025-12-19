@@ -1,7 +1,7 @@
 idf_component_register(
     REQUIRES esp_timer freertos nvs_flash
-    SRCS "main.cpp" "IMU.cpp" "merge.cpp" "fitter.cpp" 
-    PRIV_REQUIRES LSM6DSV16X
+    SRCS "main.cpp" "IMU.cpp" "merge.cpp" "fitter.cpp" "tft.cpp"
+    PRIV_REQUIRES LSM6DSV16X Adafruit-ST7735-Library
     INCLUDE_DIRS ""
 )
 

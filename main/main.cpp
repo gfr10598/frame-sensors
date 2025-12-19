@@ -29,6 +29,8 @@ processor will only require about 20% duty cycle to keep up.
 #include "IMU.h"
 #include "merge.h"
 
+#include "tft.h"
+
 /// @brief  Read many records from the FIFO and print them.
 ///  It appears that all records from a clock tick appear simultaneously.
 /// @param LSM
@@ -50,10 +52,16 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
 extern "C" void app_main()
 {
     initArduino();
+
+    setup_tft();
+
     pinMode(13, OUTPUT);
     digitalWrite(13, HIGH);
     pinMode(7, OUTPUT);
     digitalWrite(7, HIGH);
+
+    printf("TFT should show text now\n");
+    vTaskSuspend(NULL); // TEMPORARY - SUSPEND HERE FOR NOW
 
     Wire.begin(3, 4, 1000000);
     auto imu1 = init_lsm(&Wire, LSM6DSV16X_I2C_ADD_L);
