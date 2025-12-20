@@ -28,6 +28,7 @@ processor will only require about 20% duty cycle to keep up.
 
 #include "IMU.h"
 #include "merge.h"
+#include "fitter.h"
 
 #include "tft.h"
 
@@ -52,7 +53,10 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
 extern "C" void app_main()
 {
     initArduino();
+    test_fitter();
     // test_reproject();
+    test_imu_tracker();
+    vTaskSuspend(NULL);
 
     setup_tft();
 

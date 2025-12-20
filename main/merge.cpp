@@ -1,15 +1,15 @@
 
+#include <cassert>
 #include <stdio.h>
 #include "Arduino.h"
 #include <string>
-#include "IMU.h"
+#include "esp_debug_helpers.h"
+
 #include "lsm6dsv16x_reg.h"
+#include "IMU.h"
 
 #include "fitter.h"
-
 #include "merge.h"
-
-#include <cassert>
 
 /// @brief Reproject samples using linear interpolation.
 /// @param last  The last sample prior to the message.
@@ -49,7 +49,7 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
 
     while (k < msg.sample_count && n < 32)
     {
-        // printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
+        printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
 
         int16_t *b = (int16_t *)msg.records[k].data;
         int16_t *out = (int16_t *)projected.records[n++].data;
@@ -117,39 +117,53 @@ struct MergeMessage
 class IMUTracker
 {
 private:
-    LoggerMsg current_msg;
     long base_count = 0;          // Sample count of the first record in current_msg.
     int16_t last_record[3] = {0}; // Last record from previous message.
     int next;
 
 public:
     TimeFitter fitter;
+    LoggerMsg current_msg;
 
-    IMUTracker() : fitter(0.001f) {}
-    void update(LoggerMsg msg)
+    IMUTracker() : fitter(0.001f), current_msg() {}
+    void update(LoggerMsg &msg)
     {
+        if (msg.sample_count == 0)
+            return;
+
+        base_count += current_msg.sample_count;
+        fitter.coord(base_count + msg.sample_count, msg.read_time);
+
         // Update the fitter with the new data.
         if (current_msg.sample_count > 0)
         {
-            base_count += current_msg.sample_count;
-            fitter.coord(base_count, current_msg.read_time);
+            if (current_msg.sample_count >= 20)
+            {
+                printf("Problem: large IMU message size: %d\n", current_msg.sample_count);
+                esp_backtrace_print(10);
+                vTaskSuspend(NULL);
+            }
             for (int i = 0; i < 3; i++)
                 last_record[i] = current_msg.records[current_msg.sample_count - 1].data[i];
         }
+        else
+        {
+            for (int i = 0; i < 3; i++)
+                last_record[i] = msg.records[0].data[i];
+        }
         current_msg = msg;
         next = 0;
+    }
+
+    float slope() const
+    {
+        return fitter.slope();
     }
 
     // Time attributed to a given sample count.
     int64_t time_for(long sample_count)
     {
         return fitter.time_for(sample_count);
-    }
-
-    // Time between samples in usec.
-    int64_t delta_t()
-    {
-        return (int64_t)(fitter.slope());
     }
 
     /// @brief Project this IMUTracker's data onto another IMUTracker's fitter.
@@ -167,7 +181,10 @@ public:
         // NOTE: This should generally be less than 1.0, since we are projecting
         // onto the faster IMU timebase.  It should also be very stable.
         // Units are local steps per other step.
-        float increment = other.slope() / (float)delta_t();
+        float increment = other.slope() / slope();
+        printf("This IMU slope: %f other IMU slope: %f\n", slope(), other.slope());
+        printf("Projecting IMU: start_time=%lld other_sample_base=(%lld,%f) increment=%f\n",
+               start_time, other_sample_base.first, other_sample_base.second, increment);
 
         // This should always be less than 1.0.
         float local_fraction = other_sample_base.second * increment;
@@ -177,6 +194,84 @@ public:
         return {other_sample_base.first, projected};
     }
 };
+
+/// @brief This requires three IMU messages for each IMU.  The first
+/// provides the basis for last_record and the first time point.
+/// The second and third provide data to fit the timebase.
+void test_imu_tracker()
+{
+    IMUTracker left, right;
+
+    LoggerMsg msg1;
+    msg1.sample_count = 8;
+    msg1.read_time = 2000;
+    for (int i = 0; i < msg1.sample_count; i++)
+    {
+        msg1.records[i].data[0] = i * 100;
+        msg1.records[i].data[1] = i * 100 + 1;
+        msg1.records[i].data[2] = i * 100 + 2;
+    }
+    printf("Updating left IMU\n");
+    left.update(msg1);
+
+    LoggerMsg msg2;
+    msg2.sample_count = 7;
+    msg2.read_time = 4000;
+    for (int i = 0; i < msg2.sample_count; i++)
+    {
+        msg2.records[i].data[0] = 400 + i * 100;
+        msg2.records[i].data[1] = 400 + i * 100 + 1;
+        msg2.records[i].data[2] = 400 + i * 100 + 2;
+    }
+    printf("Updating right IMU\n");
+    right.update(msg2);
+
+    msg1.read_time = 6000;
+    for (int i = 0; i < 8; i++)
+    {
+        msg1.records[i].data[0] = 800 + i * 100 + 0;
+        msg1.records[i].data[1] = 800 + i * 100 + 1;
+        msg1.records[i].data[2] = 800 + i * 100 + 2;
+    }
+    left.update(msg1);
+
+    msg2.read_time = 8000;
+    for (int i = 0; i < 7; i++)
+    {
+        msg2.records[i].data[0] = 1200 + i * 100 + 0;
+        msg2.records[i].data[1] = 1200 + i * 100 + 1;
+        msg2.records[i].data[2] = 1200 + i * 100 + 2;
+    }
+    right.update(msg2);
+
+    msg1.read_time = 10000;
+    for (int i = 0; i < 8; i++)
+    {
+        msg1.records[i].data[0] = 1600 + i * 100 + 0;
+        msg1.records[i].data[1] = 1600 + i * 100 + 1;
+        msg1.records[i].data[2] = 1600 + i * 100 + 2;
+    }
+    left.update(msg1);
+
+    msg2.read_time = 12000;
+    for (int i = 0; i < 7; i++)
+    {
+        msg2.records[i].data[0] = 2000 + i * 100 + 0;
+        msg2.records[i].data[1] = 2000 + i * 100 + 1;
+        msg2.records[i].data[2] = 2000 + i * 100 + 2;
+    }
+    right.update(msg2);
+
+    printf("Projecting right onto left fitter\n");
+    auto [offset, projected] = right.project(left.fitter);
+    printf("Projected offset: %lld\n", offset);
+    // assert(projected.sample_count == 8);
+    for (int i = 0; i < projected.sample_count; i++)
+    {
+        printf("Left  [%d]: %5d %5d %5d", i, left.current_msg.records[i].data[0], left.current_msg.records[i].data[1], left.current_msg.records[i].data[2]);
+        printf("  Projected[%d]: %5d %5d %5d\n", i, projected.records[i].data[0], projected.records[i].data[1], projected.records[i].data[2]);
+    }
+}
 
 class Tracker
 {
@@ -318,7 +413,7 @@ public:
 
         if (left_tracker.total_count() > 16 || right_tracker.total_count() > 16)
         {
-            if (left_imu.delta_t() < right_imu.delta_t())
+            if (left_imu.slope() < right_imu.slope())
             {
                 // Left is faster.
                 if (msg.imu)

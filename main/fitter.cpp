@@ -1,5 +1,6 @@
 #include "fitter.h"
 #include <utility>
+#include <stdio.h>
 
 void TimeFitter::coord(long x, long y)
 {
@@ -56,14 +57,37 @@ std::pair<long, float> TimeFitter::sample_for(long t) const
     t -= time_offset;
     float yb = tsum / n;
     float xb = ksum / n;
-    float small = xb + (t - yb) / slope();
+    float local = xb + (t - yb) / slope();
     // Truncate the small part to get the integer sample index.
-    long index = sample_offset + (long)small;
-    float frac = small - (long)small;
+    long index = sample_offset + (long)local;
+    float frac = local - (long)local;
+    if (frac < 0)
+    {
+        frac += 1.0f;
+        index -= 1;
+    }
     return {index, frac};
 }
 
 float TimeFitter::slope() const
 {
     return (n * ktsum - ksum * tsum) / (n * k2sum - ksum * ksum);
+}
+
+void test_fitter()
+{
+    TimeFitter fitter(0.01f);
+
+    for (long i = 0; i < 1000; i++)
+    {
+        fitter.coord(i, i * 10 + 500);
+    }
+    assert(fitter.slope() > 9.9f && fitter.slope() < 10.1f);
+
+    for (long i = 0; i < 1000; i += 100)
+    {
+        long t = fitter.time_for(i);
+        auto [k, frac] = fitter.sample_for(t);
+        printf("Sample %ld => time %ld => sample %ld + %f\n", i, t, k, frac);
+    }
 }

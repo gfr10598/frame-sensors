@@ -42,15 +42,17 @@ private:
     void recenter();
 
     // All computations are done relative to this center
-    long sample_offset;
-    long time_offset;
+    long sample_offset{0};
+    long time_offset{0};
 
-    float ksum;
-    float k2sum;
-    float tsum;
-    float ktsum;
-    float alpha;
-    float n;
+    float ksum{0};
+    float k2sum{0};
+    float tsum{0};
+    float ktsum{0};
+    float alpha{0};
+    float n{0};
 
     int recenter_count;
 };
+
+void test_fitter();
