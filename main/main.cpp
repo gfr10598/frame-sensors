@@ -56,6 +56,7 @@ extern "C" void app_main()
     test_fitter();
     // test_reproject();
     test_imu_tracker();
+    printf("Min stack: %d\n", uxTaskGetStackHighWaterMark(NULL));
     vTaskSuspend(NULL);
 
     setup_tft();

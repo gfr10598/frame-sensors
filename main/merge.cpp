@@ -30,6 +30,7 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
     if (k == 0)
     {
         // printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
+        printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
 
         int16_t *b = (int16_t *)msg.records[k].data;
         int16_t *out = (int16_t *)projected.records[n++].data;
@@ -55,7 +56,7 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
         int16_t *out = (int16_t *)projected.records[n++].data;
         for (int i = 0; i < 3; i++)
         {
-            float value = msg.records[k - 1].data[i] + alpha * (b[i] - msg.records[k - 1].data[i]);
+            float value = a[i] + alpha * (b[i] - a[i]);
             out[i] = (int16_t)value;
         }
         alpha += increment;
@@ -117,15 +118,15 @@ struct MergeMessage
 class IMUTracker
 {
 private:
-    long base_count = 0;          // Sample count of the first record in current_msg.
     int16_t last_record[3] = {0}; // Last record from previous message.
-    int next;
 
 public:
+    long base_count = 0; // Sample count of the first record in current_msg.
     TimeFitter fitter;
     LoggerMsg current_msg;
 
-    IMUTracker() : fitter(0.001f), current_msg() {}
+    IMUTracker() : fitter(0.001f) {}
+
     void update(LoggerMsg &msg)
     {
         if (msg.sample_count == 0)
@@ -152,7 +153,6 @@ public:
                 last_record[i] = msg.records[0].data[i];
         }
         current_msg = msg;
-        next = 0;
     }
 
     float slope() const
@@ -176,6 +176,12 @@ public:
         int64_t start_time = fitter.time_for(base_count);
         // Find the corresponding sample location in the other IMU.
         std::pair<int64_t, float> other_sample_base = other.sample_for(start_time);
+        printf("Last:  %5d %5d %5d\n", last_record[0], last_record[1], last_record[2]);
+        printf("First: %5d %5d %5d\n",
+               current_msg.records[0].data[0],
+               current_msg.records[0].data[1],
+               current_msg.records[0].data[2]);
+        printf("base_count=%ld start_time=%lld\n", base_count, start_time);
 
         // Compute the size of the other IMU step size in units of this IMU's sample count.
         // NOTE: This should generally be less than 1.0, since we are projecting
@@ -195,6 +201,24 @@ public:
     }
 };
 
+LoggerMsg make_test_msg(int sample_count, int64_t read_time, int64_t time_step)
+{
+    LoggerMsg msg;
+    // At the end of the samples, the values should be equal to the read time / 500.
+    // And they should increment by either
+    auto start_time = read_time - time_step * sample_count;
+    msg.read_time = read_time;
+    msg.sample_count = sample_count;
+    for (int i = 0; i < sample_count; i++)
+    {
+        msg.records[i].data[0] = start_time;
+        msg.records[i].data[1] = start_time + 1;
+        msg.records[i].data[2] = start_time + 2;
+        start_time += time_step;
+    }
+    return msg;
+}
+
 /// @brief This requires three IMU messages for each IMU.  The first
 /// provides the basis for last_record and the first time point.
 /// The second and third provide data to fit the timebase.
@@ -202,73 +226,30 @@ void test_imu_tracker()
 {
     IMUTracker left, right;
 
-    LoggerMsg msg1;
-    msg1.sample_count = 8;
-    msg1.read_time = 2000;
-    for (int i = 0; i < msg1.sample_count; i++)
-    {
-        msg1.records[i].data[0] = i * 100;
-        msg1.records[i].data[1] = i * 100 + 1;
-        msg1.records[i].data[2] = i * 100 + 2;
-    }
-    printf("Updating left IMU\n");
+    LoggerMsg msg1 = make_test_msg(8, 2000, 500);
     left.update(msg1);
-
-    LoggerMsg msg2;
-    msg2.sample_count = 7;
-    msg2.read_time = 4000;
-    for (int i = 0; i < msg2.sample_count; i++)
-    {
-        msg2.records[i].data[0] = 400 + i * 100;
-        msg2.records[i].data[1] = 400 + i * 100 + 1;
-        msg2.records[i].data[2] = 400 + i * 100 + 2;
-    }
-    printf("Updating right IMU\n");
+    LoggerMsg msg2 = make_test_msg(7, 4000, 8 * 500 / 7);
     right.update(msg2);
 
-    msg1.read_time = 6000;
-    for (int i = 0; i < 8; i++)
-    {
-        msg1.records[i].data[0] = 800 + i * 100 + 0;
-        msg1.records[i].data[1] = 800 + i * 100 + 1;
-        msg1.records[i].data[2] = 800 + i * 100 + 2;
-    }
+    msg1 = make_test_msg(8, 6000, 500);
     left.update(msg1);
-
-    msg2.read_time = 8000;
-    for (int i = 0; i < 7; i++)
-    {
-        msg2.records[i].data[0] = 1200 + i * 100 + 0;
-        msg2.records[i].data[1] = 1200 + i * 100 + 1;
-        msg2.records[i].data[2] = 1200 + i * 100 + 2;
-    }
+    msg2 = make_test_msg(7, 8000, 8 * 500 / 7);
     right.update(msg2);
 
-    msg1.read_time = 10000;
-    for (int i = 0; i < 8; i++)
-    {
-        msg1.records[i].data[0] = 1600 + i * 100 + 0;
-        msg1.records[i].data[1] = 1600 + i * 100 + 1;
-        msg1.records[i].data[2] = 1600 + i * 100 + 2;
-    }
+    msg1 = make_test_msg(8, 10000, 500);
     left.update(msg1);
-
-    msg2.read_time = 12000;
-    for (int i = 0; i < 7; i++)
-    {
-        msg2.records[i].data[0] = 2000 + i * 100 + 0;
-        msg2.records[i].data[1] = 2000 + i * 100 + 1;
-        msg2.records[i].data[2] = 2000 + i * 100 + 2;
-    }
+    msg2 = make_test_msg(7, 12000, 8 * 500 / 7);
     right.update(msg2);
 
     printf("Projecting right onto left fitter\n");
     auto [offset, projected] = right.project(left.fitter);
     printf("Projected offset: %lld\n", offset);
     // assert(projected.sample_count == 8);
+    printf("Left base %ld  Right base %ld\n", left.base_count, right.base_count);
     for (int i = 0; i < projected.sample_count; i++)
     {
         printf("Left  [%d]: %5d %5d %5d", i, left.current_msg.records[i].data[0], left.current_msg.records[i].data[1], left.current_msg.records[i].data[2]);
+        printf("  Right [%d]: %5d %5d %5d", i, right.current_msg.records[i].data[0], right.current_msg.records[i].data[1], right.current_msg.records[i].data[2]);
         printf("  Projected[%d]: %5d %5d %5d\n", i, projected.records[i].data[0], projected.records[i].data[1], projected.records[i].data[2]);
     }
 }
