@@ -9,6 +9,8 @@
 
 #include "merge.h"
 
+#include <cassert>
+
 /// @brief Reproject samples using linear interpolation.
 /// @param last  The last sample prior to the message.
 /// @param msg The message to reproject.
@@ -18,7 +20,7 @@
 /// Performance - about 30 usec for 8 samples, with debug.
 LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, float increment)
 {
-    LoggerMsg projected = msg; // Copy over metadata.
+    LoggerMsg projected;
     int16_t *a = (int16_t *)last;
     int n = 0; // The output index.
 
@@ -27,6 +29,8 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
     alpha -= k;
     if (k == 0)
     {
+        // printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
+
         int16_t *b = (int16_t *)msg.records[k].data;
         int16_t *out = (int16_t *)projected.records[n++].data;
         for (int i = 0; i < 3; i++)
@@ -43,9 +47,10 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
         }
     }
 
-    while (k < msg.sample_count - 1 && n < 32)
+    while (k < msg.sample_count && n < 32)
     {
-        ;
+        // printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
+
         int16_t *b = (int16_t *)msg.records[k].data;
         int16_t *out = (int16_t *)projected.records[n++].data;
         for (int i = 0; i < 3; i++)
@@ -62,7 +67,41 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
         }
     }
 
+    projected.sample_count = n;
+    projected.read_time = msg.read_time;
+
     return projected;
+}
+
+void test_reproject()
+{
+    LoggerMsg msg;
+    msg.sample_count = 4;
+    for (int i = 0; i < msg.sample_count; i++)
+    {
+        msg.records[i].data[0] = i * 100;
+        msg.records[i].data[1] = i * 100 + 1;
+        msg.records[i].data[2] = i * 100 + 2;
+    }
+    for (int i = 0; i < msg.sample_count; i++)
+    {
+        printf("Initial[%d]: %d %d %d\n", i, msg.records[i].data[0], msg.records[i].data[1], msg.records[i].data[2]);
+    }
+
+    int16_t last[3] = {-100, -99, -98};
+    float start = 0.9f;
+    float increment = 0.85f;
+    LoggerMsg projected = reproject(last, msg, start, increment);
+    for (int i = 0; i < projected.sample_count; i++)
+    {
+        printf("Projected[%d]: %d %d %d\n", i, projected.records[i].data[0], projected.records[i].data[1], projected.records[i].data[2]);
+    }
+
+    assert(projected.sample_count == 4);
+    assert(projected.records[0].data[0] == -10);
+    assert(projected.records[1].data[0] == 75);
+    assert(projected.records[2].data[0] == 160);
+    assert(projected.records[3].data[0] == 245);
 }
 
 // This module merges data from two IMUs.  It leaves the faster

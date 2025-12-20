@@ -52,6 +52,7 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
 extern "C" void app_main()
 {
     initArduino();
+    // test_reproject();
 
     setup_tft();
 

@@ -13,3 +13,5 @@ struct LoggerMsg
     int sample_count;
     lsm6dsv16x_fifo_record_t records[32]; // Up to 16 samples per read.
 };
+
+void test_reproject();
