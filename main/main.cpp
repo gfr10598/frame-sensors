@@ -61,7 +61,6 @@ extern "C" void app_main()
     digitalWrite(7, HIGH);
 
     printf("TFT should show text now\n");
-    vTaskSuspend(NULL); // TEMPORARY - SUSPEND HERE FOR NOW
 
     Wire.begin(3, 4, 1000000);
     auto imu1 = init_lsm(&Wire, LSM6DSV16X_I2C_ADD_L);
