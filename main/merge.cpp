@@ -9,6 +9,62 @@
 
 #include "merge.h"
 
+/// @brief Reproject samples using linear interpolation.
+/// @param last  The last sample prior to the message.
+/// @param msg The message to reproject.
+/// @param start The fractional start position (<= 1.0).
+/// @param increment The fractional step size (usually < 1.0).
+///
+/// Performance - about 30 usec for 8 samples, with debug.
+LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, float increment)
+{
+    LoggerMsg projected = msg; // Copy over metadata.
+    int16_t *a = (int16_t *)last;
+    int n = 0; // The output index.
+
+    float alpha = start;
+    int k = (int)(alpha);
+    alpha -= k;
+    if (k == 0)
+    {
+        int16_t *b = (int16_t *)msg.records[k].data;
+        int16_t *out = (int16_t *)projected.records[n++].data;
+        for (int i = 0; i < 3; i++)
+        {
+            float value = a[i] + alpha * (b[i] - a[i]);
+            out[i] = (int16_t)value;
+        }
+        alpha += increment;
+        if (alpha >= 1.0f)
+        {
+            k++;
+            a = b;
+            alpha -= 1.0f;
+        }
+    }
+
+    while (k < msg.sample_count - 1 && n < 32)
+    {
+        ;
+        int16_t *b = (int16_t *)msg.records[k].data;
+        int16_t *out = (int16_t *)projected.records[n++].data;
+        for (int i = 0; i < 3; i++)
+        {
+            float value = msg.records[k - 1].data[i] + alpha * (b[i] - msg.records[k - 1].data[i]);
+            out[i] = (int16_t)value;
+        }
+        alpha += increment;
+        if (alpha >= 1.0f)
+        {
+            k++;
+            a = b;
+            alpha -= 1.0f;
+        }
+    }
+
+    return projected;
+}
+
 // This module merges data from two IMUs.  It leaves the faster
 // IMU data unchanged, and interpolates the slower IMU data to
 // match the timing of the faster IMU data.
@@ -22,13 +78,14 @@ struct MergeMessage
 class IMUTracker
 {
 private:
-    TimeFitter fitter;
     LoggerMsg current_msg;
     long base_count = 0;          // Sample count of the first record in current_msg.
     int16_t last_record[3] = {0}; // Last record from previous message.
     int next;
 
 public:
+    TimeFitter fitter;
+
     IMUTracker() : fitter(0.001f) {}
     void update(LoggerMsg msg)
     {
@@ -62,7 +119,6 @@ public:
     /// starting from that sample.
     std::pair<int64_t, LoggerMsg> project(const TimeFitter &other)
     {
-        LoggerMsg projected;
         // This is the time of the first sample in the current msg.
         int64_t start_time = fitter.time_for(base_count);
         // Find the corresponding sample location in the other IMU.
@@ -72,31 +128,13 @@ public:
         // NOTE: This should generally be less than 1.0, since we are projecting
         // onto the faster IMU timebase.  It should also be very stable.
         // Units are local steps per other step.
-        float increment = other.slope() / fitter.slope();
+        float increment = other.slope() / (float)delta_t();
 
-        float fraction_index = other_sample_base.second * increment;
+        // This should always be less than 1.0.
+        float local_fraction = other_sample_base.second * increment;
 
-        // Find the index into the local data.
-        long other_time = start_time - (other_sample_base.second);
-
-        // We need to project the sample before the first sample in the LoggerMsg, using
-        // the last_record.
-        int k = 0;
-        auto rec = &projected.records[k++];
-        float alpha = other_sample_base.second; // The distance from k-1 sample from other IMU.
-        // compute the interpolated values.
-        for (int i = 0; i < 3; i++)
-        {
-            float value = last_record[i] + (current_msg.records[0].data[i] - last_record[i]) * alpha;
-            rec->data[i] = (int16_t)value;
-        }
-
-        // Now project the rest of the samples.
-        for (int i = 0; i < current_msg.sample_count; i++)
-        {
-            float frac = other_sample_base.second + increment;
-        }
-
+        LoggerMsg projected = reproject(
+            last_record, current_msg, local_fraction, increment);
         return {other_sample_base.first, projected};
     }
 };
@@ -149,6 +187,9 @@ private:
     int ping_pong_index = 0;    // Next entry to write into.
     Tracker left_tracker;
     Tracker right_tracker;
+
+    IMUTracker left_imu;
+    IMUTracker right_imu;
 
     bool last_imu = false; // Last IMU seen.
     int left_skips = 0;
@@ -223,10 +264,12 @@ public:
         if (msg.imu)
         {
             right_tracker.replace(msg);
+            right_imu.update(msg);
         }
         else
         {
             left_tracker.replace(msg);
+            left_imu.update(msg);
         }
 
         // Try to merge as much data as possible.
@@ -234,6 +277,27 @@ public:
         while (next())
             ;
 
+        if (left_tracker.total_count() > 16 || right_tracker.total_count() > 16)
+        {
+            if (left_imu.delta_t() < right_imu.delta_t())
+            {
+                // Left is faster.
+                if (msg.imu)
+                {
+                    // Right IMU message just arrived.  Do projection onto left fitter.
+                    auto projected = right_imu.project(left_imu.fitter);
+                }
+            }
+            else
+            {
+                // Right is faster.
+                if (!msg.imu)
+                {
+                    // Left IMU message just arrived.  Do projection onto right fitter.
+                    auto projected = left_imu.project(right_imu.fitter);
+                }
+            }
+        }
         auto end = esp_timer_get_time();
         printf("Merge time: %d usec for %d samples\n", (int)(end - start), msg.sample_count);
     }
