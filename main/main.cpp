@@ -54,9 +54,17 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
 extern "C" void app_main()
 {
     initArduino();
-    Serial.begin(4 * 8 * 115200);
+
+    // With baud rate set to 4Mb/sec. the UART can keep up with about 150
+    // characters every 2 msec, (i.e. about 75k characters/sec), but the
+    // monitor program on the other end may not be able to keep up.  VSCode
+    // and idf.py monitor seem to be able to handle about 20k characters/sec,
+    // which is only about 200 kbaud.
+    Serial.begin(8 * 115200);
+    printf("Min stack: %d\n", uxTaskGetStackHighWaterMark(NULL));
 
     test_fitter();
+    printf("Min stack: %d\n", uxTaskGetStackHighWaterMark(NULL));
     // test_reproject();
     test_imu_tracker();
     printf("Min stack: %d\n", uxTaskGetStackHighWaterMark(NULL));

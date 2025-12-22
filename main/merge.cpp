@@ -175,6 +175,7 @@ public:
     /// @param other
     /// @return the 'other' sample index of the first projected sample, and the projected values
     /// starting from that sample.
+    /// @TODO - this takes quite a bit of stack space.  Can we reduce it?
     std::pair<int64_t, LoggerMsg> project(const TimeFitter &other)
     {
         // This is the time of the first sample in the current msg.
@@ -247,8 +248,11 @@ void test_imu_tracker()
     msg2 = make_test_msg(7, 12000, 8 * 500 / 7);
     right.update(msg2);
 
+    printf("Min stack in test_imu_tracker: %d\n", uxTaskGetStackHighWaterMark(NULL));
+
     printf("Projecting right onto left fitter\n");
     auto [offset, projected] = right.project(left.fitter);
+    printf("Min stack after project: %d\n", uxTaskGetStackHighWaterMark(NULL));
     printf("Projected offset: %lld\n", offset);
     // assert(projected.sample_count == 8);
     printf("Left base %ld  Right base %ld\n", left.base_count, right.base_count);
@@ -437,10 +441,6 @@ public:
         auto end = esp_timer_get_time();
         // Printing is slow unless we change the default baud rate.  See main().
         printf("Delay: %6d usec  Merge: %3d usec samples: %2d\n", (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
-        // This print alone takes over 1 msec.
-        // Is the serial output just slow?  Do we need to change the baud rate?
-        // printf("Delay %8lld\n", start - msg.read_time);
-        // printf("Print time  : %3d usec\n", (int)(esp_timer_get_time() - end));
     }
 };
 
