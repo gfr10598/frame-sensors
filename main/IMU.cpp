@@ -28,6 +28,11 @@ LSM6DSV16XStatusTypeDef LSMExtension::Read_FIFO_Data(uint16_t max, lsm6dsv16x_fi
     int status = FIFO_Get_Num_Samples(count);
     if (status != LSM6DSV16X_OK)
         return LSM6DSV16X_ERROR;
+    if (*count > 0x1FF)
+    {
+        printf("Bad Get_Num_Samples? %d\n", *count);
+        status = FIFO_Get_Num_Samples(count);
+    }
     if (*count == 0)
     {
         return LSM6DSV16X_OK;

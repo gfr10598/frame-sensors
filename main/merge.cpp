@@ -30,7 +30,6 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
     if (k == 0)
     {
         // printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
-        printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
 
         int16_t *b = (int16_t *)msg.records[k].data;
         int16_t *out = (int16_t *)projected.records[n++].data;
@@ -50,7 +49,7 @@ LoggerMsg reproject(const int16_t last[3], const LoggerMsg &msg, float start, fl
 
     while (k < msg.sample_count && n < 32)
     {
-        printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
+        // printf("Reproject k=%d n=%d alpha=%f\n", k, n, alpha);
 
         int16_t *b = (int16_t *)msg.records[k].data;
         int16_t *out = (int16_t *)projected.records[n++].data;
@@ -125,12 +124,18 @@ public:
     TimeFitter fitter;
     LoggerMsg current_msg;
 
-    IMUTracker() : fitter(0.001f) {}
+    IMUTracker() : fitter(0.001f), current_msg(LoggerMsg()) {}
 
     void update(LoggerMsg &msg)
     {
         if (msg.sample_count == 0)
             return;
+        if (msg.sample_count >= 32)
+        {
+            printf("Problem: large IMU message size: %d\n", msg.sample_count);
+            esp_backtrace_print(10);
+            vTaskSuspend(NULL);
+        }
 
         base_count += current_msg.sample_count;
         fitter.coord(base_count + msg.sample_count, msg.read_time);
@@ -140,7 +145,7 @@ public:
         {
             if (current_msg.sample_count >= 20)
             {
-                printf("Problem: large IMU message size: %d\n", current_msg.sample_count);
+                printf("Problem: large IMU message size: %d %p\n", current_msg.sample_count, &msg);
                 esp_backtrace_print(10);
                 vTaskSuspend(NULL);
             }
@@ -176,21 +181,22 @@ public:
         int64_t start_time = fitter.time_for(base_count);
         // Find the corresponding sample location in the other IMU.
         std::pair<int64_t, float> other_sample_base = other.sample_for(start_time);
-        printf("Last:  %5d %5d %5d\n", last_record[0], last_record[1], last_record[2]);
-        printf("First: %5d %5d %5d\n",
-               current_msg.records[0].data[0],
-               current_msg.records[0].data[1],
-               current_msg.records[0].data[2]);
-        printf("base_count=%ld start_time=%lld\n", base_count, start_time);
+
+        // printf("Last:  %5d %5d %5d\n", last_record[0], last_record[1], last_record[2]);
+        // printf("First: %5d %5d %5d\n",
+        //        current_msg.records[0].data[0],
+        //        current_msg.records[0].data[1],
+        //        current_msg.records[0].data[2]);
+        // printf("base_count=%ld start_time=%lld\n", base_count, start_time);
 
         // Compute the size of the other IMU step size in units of this IMU's sample count.
         // NOTE: This should generally be less than 1.0, since we are projecting
         // onto the faster IMU timebase.  It should also be very stable.
         // Units are local steps per other step.
         float increment = other.slope() / slope();
-        printf("This IMU slope: %f other IMU slope: %f\n", slope(), other.slope());
-        printf("Projecting IMU: start_time=%lld other_sample_base=(%lld,%f) increment=%f\n",
-               start_time, other_sample_base.first, other_sample_base.second, increment);
+        // printf("This IMU slope: %f other IMU slope: %f\n", slope(), other.slope());
+        // printf("Projecting IMU: start_time=%lld other_sample_base=(%lld,%f) increment=%f\n",
+        //        start_time, other_sample_base.first, other_sample_base.second, increment);
 
         // This should always be less than 1.0.
         float local_fraction = other_sample_base.second * increment;
@@ -254,6 +260,7 @@ void test_imu_tracker()
     }
 }
 
+// TODO - looking at pointers, it appears that Tracker is taking up 256 bytes?
 class Tracker
 {
 private:
@@ -270,6 +277,12 @@ public:
     {
         delta_time = new_msg.read_time - msg.read_time;
         msg = new_msg;
+        if (msg.sample_count == 0 || msg.sample_count > 32)
+        {
+            printf("Problem: bad IMU message size: %d at %p\n", msg.sample_count, &msg);
+            esp_backtrace_print(10);
+            vTaskSuspend(NULL);
+        }
         next = 0;
         count += msg.sample_count;
     }
@@ -344,6 +357,13 @@ public:
         lsm6dsv16x_fifo_record_t &left = left_tracker.next_record();
         lsm6dsv16x_fifo_record_t &right = right_tracker.next_record();
 
+        if (&left == &right)
+        {
+            printf("Left and right records are the same!");
+            esp_backtrace_print(10);
+            vTaskSuspend(NULL);
+        }
+
         auto merge = &ping_pong[ping_pong_index++];
         merge->data[0] = left.data[0];
         merge->data[1] = left.data[1];
@@ -361,6 +381,7 @@ public:
         {
             // Output merged data.
             auto &m = ping_pong[0];
+            ping_pong_index = 0;
         }
 
         return true;
@@ -392,7 +413,7 @@ public:
         while (next())
             ;
 
-        if (left_tracker.total_count() > 16 || right_tracker.total_count() > 16)
+        if (left_tracker.total_count() > 16 && right_tracker.total_count() > 16)
         {
             if (left_imu.slope() < right_imu.slope())
             {
@@ -414,7 +435,12 @@ public:
             }
         }
         auto end = esp_timer_get_time();
-        printf("Merge time: %d usec for %d samples\n", (int)(end - start), msg.sample_count);
+        // This printf is slow.  It doesn't help much to use -O2.  Cast to int also doesn't help.
+        printf("Delay = %6d Merge time: %3d usec for %2d samples\n", (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
+        // This print alone takes over 1 msec.
+        // Is the serial output just slow?  Do we need to change the baud rate?
+        // printf("Delay %8lld\n", start - msg.read_time);
+        // printf("Print time  : %3d usec\n", (int)(esp_timer_get_time() - end));
     }
 };
 
@@ -429,8 +455,16 @@ void logger_task(void *q)
         LoggerMsg msg;
         if (xQueueReceive(queue, &msg, portMAX_DELAY) == pdTRUE)
         {
+            if (msg.sample_count > 20)
+            {
+                printf("****************************************** Warning: large IMU message %d samples\n", msg.sample_count);
+            }
             merger.handle(msg);
             // printf("Logger: IMU: %d Read %2d samples at %4ld usec (%d)\n", msg.imu, msg.sample_count, msg.read_time, msg.delayed);
+        }
+        else
+        {
+            printf("Logger: Queue receive failed!\n");
         }
     }
 }

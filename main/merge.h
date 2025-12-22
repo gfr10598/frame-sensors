@@ -7,11 +7,11 @@ void logger_task(void *q);
 
 struct LoggerMsg
 {
-    bool delayed{false};  // Whether the vTaskDelayUntil was delayed.
-    int64_t read_time{0}; // usec time at end of collection
-    bool imu;             // Which IMU was collected.
-    int sample_count{0};
-    lsm6dsv16x_fifo_record_t records[32]; // Up to 16 samples per read.
+    lsm6dsv16x_fifo_record_t records[32]; // Up to 32 samples per read.
+    int64_t read_time{0};                 // usec time at end of collection
+    uint16_t sample_count{0};
+    bool delayed{false}; // Whether the vTaskDelayUntil was delayed.
+    bool imu;            // Which IMU was collected.
 };
 
 void test_reproject();

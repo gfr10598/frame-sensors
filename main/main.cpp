@@ -22,10 +22,11 @@ processor will only require about 20% duty cycle to keep up.
 
 #include "Arduino.h"
 #include <stdio.h>
-#include "LSM6DSV16XSensor.h"
 #include <string>
 #include "base64_encode.hpp"
+#include "esp_debug_helpers.h"
 
+#include "LSM6DSV16XSensor.h"
 #include "IMU.h"
 #include "merge.h"
 #include "fitter.h"
@@ -53,13 +54,19 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
 extern "C" void app_main()
 {
     initArduino();
+    Serial.begin(8 * 115200);
     test_fitter();
     // test_reproject();
     test_imu_tracker();
     printf("Min stack: %d\n", uxTaskGetStackHighWaterMark(NULL));
-    vTaskSuspend(NULL);
+    // vTaskSuspend(NULL);
 
-    setup_tft();
+    // turn on the TFT / I2C power supply
+    pinMode(TFT_I2C_POWER, OUTPUT);
+    digitalWrite(TFT_I2C_POWER, HIGH);
+    delay(100);
+
+    // setup_tft();
 
     pinMode(13, OUTPUT);
     digitalWrite(13, HIGH);
@@ -81,7 +88,7 @@ extern "C" void app_main()
     xTaskCreate(
         logger_task, /* Function that implements the task. */
         "LoggerTask",
-        4096,             /* Stack size in words, not bytes. */
+        8192,             /* Stack size in words, not bytes. */
         (void *)q,        /* Parameter passed into the task. */
         tskIDLE_PRIORITY, /* Priority at which the task is created. */
         &xHandle);
@@ -115,10 +122,16 @@ extern "C" void app_main()
             }
             toggle = !toggle;
             msg.read_time = esp_timer_get_time();
+            if (actual > 32)
+            {
+                printf("Bad actual count %d\n", actual);
+                esp_backtrace_print(10);
+                vTaskSuspend(NULL);
+            }
             msg.sample_count = actual;
             xQueueSend(q, &msg, 0);
 
-            if (10 < uxQueueMessagesWaiting(q))
+            if (20 < uxQueueMessagesWaiting(q))
             {
                 printf("**********   Warning: logger queue has %d messages pending\n", uxQueueMessagesWaiting(q));
                 vTaskSuspend(NULL);
