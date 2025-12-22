@@ -435,8 +435,8 @@ public:
             }
         }
         auto end = esp_timer_get_time();
-        // This printf is slow.  It doesn't help much to use -O2.  Cast to int also doesn't help.
-        printf("Delay = %6d Merge time: %3d usec for %2d samples\n", (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
+        // Printing is slow unless we change the default baud rate.  See main().
+        printf("Delay: %6d usec  Merge: %3d usec samples: %2d\n", (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
         // This print alone takes over 1 msec.
         // Is the serial output just slow?  Do we need to change the baud rate?
         // printf("Delay %8lld\n", start - msg.read_time);

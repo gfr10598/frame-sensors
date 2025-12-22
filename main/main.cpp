@@ -54,7 +54,8 @@ int read_all(LSMExtension &imu, lsm6dsv16x_fifo_record_t *records, int max)
 extern "C" void app_main()
 {
     initArduino();
-    Serial.begin(8 * 115200);
+    Serial.begin(4 * 8 * 115200);
+
     test_fitter();
     // test_reproject();
     test_imu_tracker();

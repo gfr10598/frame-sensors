@@ -78,13 +78,13 @@ void test_fitter()
 {
     TimeFitter fitter(0.01f);
 
-    for (long i = 0; i < 1000; i++)
+    for (long i = 0; i < 100; i++)
     {
-        fitter.coord(i, i * 10 + 500);
+        fitter.coord(i, i * 1000 + 500);
     }
-    assert(fitter.slope() > 9.9f && fitter.slope() < 10.1f);
+    assert(fitter.slope() > 999.0f && fitter.slope() < 1001.0f);
 
-    for (long i = 0; i < 1000; i += 100)
+    for (long i = 0; i < 100; i += 10)
     {
         long t = fitter.time_for(i);
         auto [k, frac] = fitter.sample_for(t);
