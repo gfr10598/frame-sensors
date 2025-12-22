@@ -264,131 +264,106 @@ void test_imu_tracker()
     }
 }
 
-// TODO - looking at pointers, it appears that Tracker is taking up 256 bytes?
-class Tracker
-{
-private:
-    int delta_time = 0;
-
-    LoggerMsg msg;
-    int next = 0;
-    int count = 0;
-
-public:
-    Tracker() {}
-
-    void replace(LoggerMsg &new_msg)
-    {
-        delta_time = new_msg.read_time - msg.read_time;
-        msg = new_msg;
-        if (msg.sample_count == 0 || msg.sample_count > 32)
-        {
-            printf("Problem: bad IMU message size: %d at %p\n", msg.sample_count, &msg);
-            esp_backtrace_print(10);
-            vTaskSuspend(NULL);
-        }
-        next = 0;
-        count += msg.sample_count;
-    }
-
-    int next_time()
-    {
-        if (delta_time == 0)
-            return -1;
-        if (next >= msg.sample_count)
-            return -1;
-        return msg.read_time - (delta_time * (msg.sample_count - next) / msg.sample_count);
-    }
-
-    lsm6dsv16x_fifo_record_t &next_record()
-    {
-        return msg.records[next++];
-    }
-
-    int total_count()
-    {
-        return count;
-    }
-};
-
 /// @brief Merges data from two IMUs.
 class Merger
 {
 private:
     MergeMessage ping_pong[20]; // About 10 msec of data.
-    int ping_pong_index = 0;    // Next entry to write into.
-    Tracker left_tracker;
-    Tracker right_tracker;
+    int left_index = 0;         // Next entry to write left data into.
+    int right_index = 0;        // Next entry to write right data into.
+    bool left_faster = false;   // Is left IMU faster?
 
     IMUTracker left_imu;
     IMUTracker right_imu;
 
     bool last_imu = false; // Last IMU seen.
-    int left_skips = 0;
-    int right_skips = 0;
+
+    void output(const MergeMessage &msg)
+    {
+    }
 
 public:
-    bool next(bool log = false)
+    void fill_left(LoggerMsg &msg)
     {
-        int left_time = left_tracker.next_time();
-        int right_time = right_tracker.next_time();
-        if (left_time <= 0 || right_time <= 0)
-            return false;
-        while (left_time < right_time - 500)
+        bool wrap10 = false;
+        bool wrap20 = false;
+        for (int i = 0; i < msg.sample_count; i++)
         {
-            // Drop the left sample.
-            left_skips++;
-
-            left_tracker.next_record();
-            left_time = left_tracker.next_time();
-            if (left_time <= 0)
-                return false;
+            auto left = msg.records[i];
+            auto merge = &ping_pong[left_index++];
+            if (left_index == 10)
+            {
+                wrap10 = true;
+            }
+            if (left_index >= 20)
+            {
+                left_index = 0;
+                wrap20 = true;
+            }
+            merge->data[0] = left.data[0];
+            merge->data[1] = left.data[1];
+            merge->data[2] = left.data[2];
         }
-        while (right_time < left_time - 500)
+        if (wrap10 && right_index >= 10)
+            output(ping_pong[0]);
+        if (wrap20 && (right_index < 10))
+            output(ping_pong[10]);
+    }
+
+    void fill_right(LoggerMsg &msg)
+    {
+        bool wrap10 = false;
+        bool wrap20 = false;
+        for (int i = 0; i < msg.sample_count; i++)
         {
-            // Drop the right sample.
-            right_skips++;
-
-            right_tracker.next_record();
-            right_time = right_tracker.next_time();
-            if (right_time <= 0)
-                return false;
+            auto right = msg.records[i];
+            auto merge = &ping_pong[right_index++];
+            if (right_index == 10)
+                wrap10 = true;
+            if (right_index >= 20)
+                right_index = 0;
+            merge->data[1] = right.data[0];
+            merge->data[2] = right.data[1];
+            merge->data[3] = right.data[2];
         }
-        if (log)
+        if (wrap10 && left_index >= 10)
+            output(ping_pong[0]);
+        if (wrap20 && (left_index < 10))
+            output(ping_pong[10]);
+    }
+
+    /// @brief  Fill in left values.
+    /// @precondition left_faster has been initialized.
+    /// ### TODO ### We need to skip the initial unmatched samples.
+    void process_left(LoggerMsg &left)
+    {
+        left_imu.update(left);
+        if (left_faster)
         {
-            // printf("Next times: Left=%9d Right=%9d LS=%4d/%6d RS=%4d/%6d\n", left_time, right_time, left_skips, left_tracker.total_count(), right_skips, right_tracker.total_count());
+            fill_left(left);
         }
-        lsm6dsv16x_fifo_record_t &left = left_tracker.next_record();
-        lsm6dsv16x_fifo_record_t &right = right_tracker.next_record();
-
-        if (&left == &right)
+        else
         {
-            printf("Left and right records are the same!");
-            esp_backtrace_print(10);
-            vTaskSuspend(NULL);
+            // The right side dictates timing, and where the left samples go.
+            // BUG - there may be a problem with number of samples here.
+            // Sometimes there should be same number and sometimes +1.
+            auto [start, interp] = left_imu.project(right_imu.fitter);
+            fill_left(interp);
         }
+    }
 
-        auto merge = &ping_pong[ping_pong_index++];
-        merge->data[0] = left.data[0];
-        merge->data[1] = left.data[1];
-        merge->data[2] = left.data[2];
-        merge->data[3] = right.data[0];
-        merge->data[4] = right.data[1];
-        merge->data[5] = right.data[2];
-
-        if (ping_pong_index == 10)
+    void process_right(LoggerMsg &right)
+    {
+        right_imu.update(right);
+        if (!left_faster)
         {
-            // Output merged data.
-            auto &m = ping_pong[0];
+            fill_right(right);
         }
-        else if (ping_pong_index == 20)
+        else
         {
-            // Output merged data.
-            auto &m = ping_pong[0];
-            ping_pong_index = 0;
+            auto [start, interp] = right_imu.project(left_imu.fitter);
+            fill_right(interp);
         }
-
-        return true;
     }
 
     void handle(LoggerMsg &msg)
@@ -402,42 +377,10 @@ public:
         last_imu = msg.imu;
 
         if (msg.imu)
-        {
-            right_tracker.replace(msg);
-            right_imu.update(msg);
-        }
+            process_left(msg);
         else
-        {
-            left_tracker.replace(msg);
-            left_imu.update(msg);
-        }
+            process_right(msg);
 
-        // Try to merge as much data as possible.
-        next(true);
-        while (next())
-            ;
-
-        if (left_tracker.total_count() > 16 && right_tracker.total_count() > 16)
-        {
-            if (left_imu.slope() < right_imu.slope())
-            {
-                // Left is faster.
-                if (msg.imu)
-                {
-                    // Right IMU message just arrived.  Do projection onto left fitter.
-                    auto projected = right_imu.project(left_imu.fitter);
-                }
-            }
-            else
-            {
-                // Right is faster.
-                if (!msg.imu)
-                {
-                    // Left IMU message just arrived.  Do projection onto right fitter.
-                    auto projected = left_imu.project(right_imu.fitter);
-                }
-            }
-        }
         auto end = esp_timer_get_time();
         // Printing is slow unless we change the default baud rate.  See main().
         printf("Delay: %6d usec  Merge: %3d usec samples: %2d\n", (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
