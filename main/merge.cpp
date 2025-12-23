@@ -120,7 +120,8 @@ private:
     int16_t last_record[3] = {0}; // Last record from previous message.
 
 public:
-    long base_count = 0; // Sample count of the first record in current_msg.
+    long msg_count = 0;  // Number of messages processed.
+    long base_count = 0; // Cumulative sample count of the first record in current_msg.
     TimeFitter fitter;
     LoggerMsg current_msg;
 
@@ -130,6 +131,7 @@ public:
     {
         if (msg.sample_count == 0)
             return;
+        msg_count++;
         if (msg.sample_count >= 32)
         {
             printf("Problem: large IMU message size: %d\n", msg.sample_count);
@@ -171,6 +173,11 @@ public:
         return fitter.time_for(sample_count);
     }
 
+    std::pair<long, float> sample_for(long t) const
+    {
+        return fitter.sample_for(t);
+    }
+
     /// @brief Project this IMUTracker's data onto another IMUTracker's fitter.
     /// @param other
     /// @return the 'other' sample index of the first projected sample, and the projected values
@@ -183,21 +190,11 @@ public:
         // Find the corresponding sample location in the other IMU.
         std::pair<int64_t, float> other_sample_base = other.sample_for(start_time);
 
-        // printf("Last:  %5d %5d %5d\n", last_record[0], last_record[1], last_record[2]);
-        // printf("First: %5d %5d %5d\n",
-        //        current_msg.records[0].data[0],
-        //        current_msg.records[0].data[1],
-        //        current_msg.records[0].data[2]);
-        // printf("base_count=%ld start_time=%lld\n", base_count, start_time);
-
         // Compute the size of the other IMU step size in units of this IMU's sample count.
         // NOTE: This should generally be less than 1.0, since we are projecting
         // onto the faster IMU timebase.  It should also be very stable.
         // Units are local steps per other step.
         float increment = other.slope() / slope();
-        // printf("This IMU slope: %f other IMU slope: %f\n", slope(), other.slope());
-        // printf("Projecting IMU: start_time=%lld other_sample_base=(%lld,%f) increment=%f\n",
-        //        start_time, other_sample_base.first, other_sample_base.second, increment);
 
         // This should always be less than 1.0.
         float local_fraction = other_sample_base.second * increment;
@@ -268,6 +265,7 @@ void test_imu_tracker()
 class Merger
 {
 private:
+    bool first_write = true;
     MergeMessage ping_pong[20]; // About 10 msec of data.
     int left_index = 0;         // Next entry to write left data into.
     int right_index = 0;        // Next entry to write right data into.
@@ -278,13 +276,48 @@ private:
 
     bool last_imu = false; // Last IMU seen.
 
-    void output(const MergeMessage &msg)
+    void output(const MergeMessage *msg)
     {
+        // Output the merged message.
+        // For now, just print it.
+        if (true)
+        {
+            printf("0 %5d %5d %5d %5d %5d %5d\n",
+                   msg->data[0], msg->data[1], msg->data[2],
+                   msg->data[3], msg->data[4], msg->data[5]);
+            msg += 5;
+            printf("5 %5d %5d %5d %5d %5d %5d\n",
+                   msg->data[0], msg->data[1], msg->data[2],
+                   msg->data[3], msg->data[4], msg->data[5]);
+        }
+        else
+        {
+            printf("%5d %5d\n", msg->data[2], msg->data[5]);
+            msg += 2;
+            printf("%5d %5d\n", msg->data[2], msg->data[5]);
+            msg += 2;
+            printf("%5d %5d\n", msg->data[2], msg->data[5]);
+            msg += 2;
+            printf("%5d %5d\n", msg->data[2], msg->data[5]);
+            msg += 2;
+            printf("%5d %5d\n", msg->data[2], msg->data[5]);
+            msg += 2;
+        }
     }
 
 public:
+    /// @brief Whenever we fill, we should only fill slots that have both left and right data.
+    /// @param msg
     void fill_left(LoggerMsg &msg)
     {
+        int start_index = 0;
+        if (first_write)
+        {
+            auto start_time = right_imu.time_for(right_imu.base_count + right_imu.current_msg.sample_count);
+            auto [left_sample, frac] = left_imu.sample_for(start_time);
+            start_index = left_sample - left_imu.base_count;
+            first_write = false;
+        }
         bool wrap10 = false;
         bool wrap20 = false;
         for (int i = 0; i < msg.sample_count; i++)
@@ -305,16 +338,24 @@ public:
             merge->data[2] = left.data[2];
         }
         if (wrap10 && right_index >= 10)
-            output(ping_pong[0]);
+            output(&ping_pong[0]);
         if (wrap20 && (right_index < 10))
-            output(ping_pong[10]);
+            output(&ping_pong[10]);
     }
 
     void fill_right(LoggerMsg &msg)
     {
+        int start_index = 0;
+        if (first_write)
+        {
+            auto start_time = left_imu.time_for(left_imu.base_count + left_imu.current_msg.sample_count);
+            auto [right_sample, frac] = right_imu.sample_for(start_time);
+            start_index = right_sample - right_imu.base_count;
+            first_write = false;
+        }
         bool wrap10 = false;
         bool wrap20 = false;
-        for (int i = 0; i < msg.sample_count; i++)
+        for (int i = start_index; i < msg.sample_count; i++)
         {
             auto right = msg.records[i];
             auto merge = &ping_pong[right_index++];
@@ -322,22 +363,25 @@ public:
                 wrap10 = true;
             if (right_index >= 20)
                 right_index = 0;
-            merge->data[1] = right.data[0];
-            merge->data[2] = right.data[1];
-            merge->data[3] = right.data[2];
+            merge->data[3] = right.data[0];
+            merge->data[4] = right.data[1];
+            merge->data[5] = right.data[2];
         }
         if (wrap10 && left_index >= 10)
-            output(ping_pong[0]);
+            output(&ping_pong[0]);
         if (wrap20 && (left_index < 10))
-            output(ping_pong[10]);
+            output(&ping_pong[10]);
     }
 
-    /// @brief  Fill in left values.
+    /// @brief  Process left values.
     /// @precondition left_faster has been initialized.
     /// ### TODO ### We need to skip the initial unmatched samples.
     void process_left(LoggerMsg &left)
     {
         left_imu.update(left);
+        if (left_imu.msg_count < 10 || right_imu.msg_count < 10)
+            return;
+
         if (left_faster)
         {
             fill_left(left);
@@ -355,6 +399,22 @@ public:
     void process_right(LoggerMsg &right)
     {
         right_imu.update(right);
+        if (left_imu.msg_count < 10 || right_imu.msg_count < 10)
+        {
+            // We only need to set the faster IMU once, and it doesn't matter
+            // whether we do that on a left or right message.
+            // This will set it multiple times, until we are ready to start
+            // merging.
+            if (left_imu.msg_count > 5 && right_imu.msg_count > 5)
+            {
+                // Determine which IMU is faster.
+                float left_slope = left_imu.slope();
+                float right_slope = right_imu.slope();
+                left_faster = left_slope < right_slope;
+            }
+            return;
+        }
+
         if (!left_faster)
         {
             fill_right(right);
@@ -369,6 +429,16 @@ public:
     void handle(LoggerMsg &msg)
     {
         auto start = esp_timer_get_time();
+        // Rewrite the record, omitting unused sensor types.
+        int pack = 0;
+        for (int i = 0; i < msg.sample_count; i++)
+        {
+            auto tag = msg.records[i].tag.tag_sensor;
+            if (tag == 2)
+                msg.records[pack++] = msg.records[i];
+        }
+        msg.sample_count = pack;
+
         if (msg.imu == last_imu)
         {
             printf("****************************************** Warning: duplicate IMU message %d\n", msg.imu);
@@ -383,7 +453,7 @@ public:
 
         auto end = esp_timer_get_time();
         // Printing is slow unless we change the default baud rate.  See main().
-        printf("Delay: %6d usec  Merge: %3d usec samples: %2d\n", (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
+        // printf("%d Delay: %6d usec  Merge: %3d usec samples: %2d\n", msg.imu ? 1 : 0, (int)(start - msg.read_time), (int)(end - start), (int)(msg.sample_count));
     }
 };
 
